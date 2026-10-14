@@ -1,4 +1,3 @@
-
 name: Portfolio CI-CD
 
 on:
@@ -13,116 +12,263 @@ permissions:
   contents: read
 
 jobs:
+  # ==========================================
+  # JOB 1: CONTINUOUS INTEGRATION
+  # ==========================================
   validate:
     name: CI - Validate Portfolio
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # Step 1: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Verify portfolio HTML
-        run: test -f myportfolio/index.html
-
-      - name: Verify profile image
-        run: test -f myportfolio/uma.jpeg
-
-      - name: Verify resume
+      # Step 2: Validate HTML file
+      - name: Verify Portfolio HTML
         run: |
-          if [ -f myportfolio/Resume.pdf ]; then
-            echo "Resume found"
+          if [ -f myportfolio/index.html ]; then
+            echo "SUCCESS: index.html exists"
           else
-            echo "Resume not found; continuing"
+            echo "ERROR: index.html not found"
+            exit 1
           fi
 
+      # Step 3: Validate CSS file
+      - name: Verify CSS File
+        run: |
+          if [ -f myportfolio/style.css ]; then
+            echo "SUCCESS: style.css exists"
+          else
+            echo "WARNING: style.css not found"
+          fi
+
+      # Step 4: Validate JavaScript file
+      - name: Verify JavaScript File
+        run: |
+          if [ -f myportfolio/script.js ]; then
+            echo "SUCCESS: script.js exists"
+          else
+            echo "WARNING: script.js not found"
+          fi
+
+      # Step 5: Validate profile image
+      - name: Verify Profile Image
+        run: |
+          if [ -f myportfolio/uma.jpeg ]; then
+            echo "SUCCESS: Profile image exists"
+          else
+            echo "ERROR: uma.jpeg not found"
+            exit 1
+          fi
+
+      # Step 6: Check resume
+      - name: Verify Resume
+        run: |
+          if [ -f myportfolio/Resume.pdf ]; then
+            echo "SUCCESS: Resume found"
+          else
+            echo "WARNING: Resume.pdf not found"
+          fi
+
+      # Step 7: CI completion
+      - name: CI Validation Completed
+        run: echo "Portfolio validation completed successfully"
+
+  # ==========================================
+  # JOB 2: CONTINUOUS DEPLOYMENT
+  # ==========================================
   deploy:
     name: CD - Deploy to Azure VM
-    needs: validate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
+    needs: validate
+
+    # Deploy only after a push to main.
+    # Pull requests run validation only.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     steps:
-      - name: Checkout code
+      # Step 1: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup SSH key
-        env:
-          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-        run: |
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-
-          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-
-          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
-          echo "SSH private key format is valid"
-
-      - name: Check SSH connectivity
+      # Step 2: Verify required secrets
+      - name: Check Deployment Secrets
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
+          set -eu
+
           if [ -z "$VM_HOST" ]; then
             echo "ERROR: VM_HOST secret is missing"
             exit 1
           fi
 
-          echo "Checking SSH port 22..."
-          timeout 10 bash -c \
-            'cat < /dev/null > /dev/tcp/$1/22' _ "$VM_HOST"
+          if [ -z "$VM_USER" ]; then
+            echo "ERROR: VM_USER secret is missing"
+            exit 1
+          fi
 
-      - name: Verify SSH host key
+          if [ -z "$VM_SSH_KEY" ]; then
+            echo "ERROR: VM_SSH_KEY secret is missing"
+            exit 1
+          fi
+
+          echo "Required deployment secrets are present"
+
+      # Step 3: Configure SSH private key
+      - name: Setup SSH Key
         env:
-          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
+          set -eu
+
           mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
 
-          ssh-keyscan -T 10 -H "$VM_HOST" \
-            > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$VM_SSH_KEY" \
+            > "$HOME/.ssh/deploy_key"
 
-          test -s "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key"
 
-      - name: Test SSH authentication
+          # Validate private key format
+          ssh-keygen -y \
+            -f "$HOME/.ssh/deploy_key" \
+            > /dev/null
+
+          echo "SSH private key format is valid"
+
+      # Step 4: Test SSH connection
+      - name: Test SSH Connection
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
-          ssh -i "$HOME/.ssh/deploy_key" \
+          set -eu
+
+          echo "Testing SSH authentication..."
+
+          ssh -vv \
+            -i "$HOME/.ssh/deploy_key" \
             -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -o ConnectionAttempts=1 \
+            -o StrictHostKeyChecking=accept-new \
             "${VM_USER}@${VM_HOST}" \
             "whoami"
 
-      - name: Deploy portfolio files
+          echo "SSH connection successful"
+
+      # Step 5: Check remote requirements
+      - name: Check Azure VM Requirements
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
+          set -eu
+
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=accept-new \
+            "${VM_USER}@${VM_HOST}" \
+            "command -v rsync && command -v nginx"
+
+          echo "Remote requirements verified"
+
+      # Step 6: Deploy website files
+      - name: Deploy Portfolio to Azure VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -eu
+
+          echo "Starting portfolio deployment..."
+
           rsync -av \
+            --delete \
             --exclude='.git/' \
-            -e "ssh -i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            -e "ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new" \
             myportfolio/ \
             "${VM_USER}@${VM_HOST}:/var/www/html/"
 
-      - name: Validate Nginx configuration
+          echo "Portfolio files copied successfully"
+
+      # Step 7: Validate Nginx configuration
+      - name: Validate Nginx Configuration
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
-          ssh -i "$HOME/.ssh/deploy_key" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            "${VM_USER}@${VM_HOST}" \
-            "sudo nginx -t"
+          set -eu
 
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=accept-new \
+            "${VM_USER}@${VM_HOST}" \
+            "sudo -n nginx -t"
+
+          echo "Nginx configuration is valid"
+
+      # Step 8: Reload Nginx
       - name: Reload Nginx
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
-          ssh -i "$HOME/.ssh/deploy_key" \
+          set -eu
+
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
             -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=accept-new \
             "${VM_USER}@${VM_HOST}" \
-            "sudo systemctl reload nginx"
+            "sudo -n systemctl reload nginx"
+
+          echo "Nginx reloaded successfully"
+
+      # Step 9: Verify website response
+      - name: Verify Website HTTP Response
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          set -eu
+
+          echo "Checking website response..."
+
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error \
+              --max-time 10 \
+              "http://${VM_HOST}/" \
+              -o /tmp/portfolio-response.html; then
+
+              echo "SUCCESS: Website returned HTTP 200"
+              break
+            fi
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "ERROR: Website did not respond successfully"
+              exit 1
+            fi
+
+            echo "Retrying website check..."
+            sleep 3
+          done
+
+          echo "Website deployment verification completed"
+
+      # Step 10: Deployment completion
+      - name: Deployment Completed
+        run: |
+          echo "=================================="
+          echo "PORTFOLIO DEPLOYMENT SUCCESSFUL"
+          echo "=================================="
+          echo "Azure VM deployment completed."
