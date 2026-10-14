@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   validate:
+    name: CI - Validate Portfolio
     runs-on: ubuntu-latest
 
     steps:
@@ -26,7 +27,16 @@ jobs:
       - name: Verify profile image
         run: test -f myportfolio/uma.jpeg
 
+      - name: Verify resume
+        run: |
+          if [ -f myportfolio/Resume.pdf ]; then
+            echo "Resume found"
+          else
+            echo "Resume not found; continuing"
+          fi
+
   deploy:
+    name: CD - Deploy to Azure VM
     needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -39,37 +49,80 @@ jobs:
         env:
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
 
-      
-      - name: Diagnose SSH connectivity
+          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
+          echo "SSH private key format is valid"
+
+      - name: Check SSH connectivity
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
         run: |
-          echo "Checking SSH connectivity to VM..."
-          getent hosts "$VM_HOST" || true
+          if [ -z "$VM_HOST" ]; then
+            echo "ERROR: VM_HOST secret is missing"
+            exit 1
+          fi
+
+          echo "Checking SSH port 22..."
           timeout 10 bash -c \
             'cat < /dev/null > /dev/tcp/$1/22' _ "$VM_HOST"
 
+      - name: Verify SSH host key
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          mkdir -p "$HOME/.ssh"
 
-      - name: Deploy website
+          ssh-keyscan -T 10 -H "$VM_HOST" \
+            > "$HOME/.ssh/known_hosts"
+
+          test -s "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Test SSH authentication
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
-          rsync -av --delete \
-            -e "ssh -i ~/.ssh/deploy_key" \
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "${VM_USER}@${VM_HOST}" \
+            "whoami"
+
+      - name: Deploy portfolio files
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          rsync -av \
+            --exclude='.git/' \
+            -e "ssh -i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
             myportfolio/ \
             "${VM_USER}@${VM_HOST}:/var/www/html/"
 
-      - name: Check Nginx
+      - name: Validate Nginx configuration
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
             "${VM_USER}@${VM_HOST}" \
             "sudo nginx -t"
+
+      - name: Reload Nginx
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "${VM_USER}@${VM_HOST}" \
+            "sudo systemctl reload nginx"
