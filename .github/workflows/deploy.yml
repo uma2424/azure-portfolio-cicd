@@ -44,12 +44,16 @@ jobs:
           printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Add VM host key
+      
+      - name: Diagnose SSH connectivity
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
         run: |
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          echo "Checking SSH connectivity to VM..."
+          getent hosts "$VM_HOST" || true
+          timeout 10 bash -c \
+            'cat < /dev/null > /dev/tcp/$1/22' _ "$VM_HOST"
+
 
       - name: Deploy website
         env:
