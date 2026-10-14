@@ -146,6 +146,12 @@ jobs:
           curl --fail --silent --show-error \
             https://api.ipify.org
           echo
+      - name: Diagnose Runner Network
+        run: |
+          echo "GitHub runner public IP:"
+          curl --fail --silent --show-error \
+            --max-time 10 https://api.ipify.org
+          echo
 
       # Step 4: Test SSH connection
       - name: Test SSH Connection
