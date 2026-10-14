@@ -1,5 +1,5 @@
 
-name: Portfolio CI
+name: Portfolio CI-CD
 
 on:
   push:
@@ -9,25 +9,63 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Verify portfolio HTML
-        run: |
-          test -f myportfolio/index.html
-          echo "Portfolio HTML file exists"
+        run: test -f myportfolio/index.html
 
       - name: Verify profile image
-        run: |
-          test -f myportfolio/uma.jpeg
-          echo "Profile image exists"
+        run: test -f myportfolio/uma.jpeg
 
-      - name: Verify resume
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          test -f myportfolio/Resume.pdf
-          echo "Resume file exists"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Add VM host key
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: |
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy website
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          rsync -av --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            myportfolio/ \
+            "${VM_USER}@${VM_HOST}:/var/www/html/"
+
+      - name: Check Nginx
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${VM_USER}@${VM_HOST}" \
+            "sudo nginx -t"
