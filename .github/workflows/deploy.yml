@@ -277,6 +277,16 @@ jobs:
 
           echo "Website deployment verification completed"
 
+- name: Test SSH connectivity
+  env:
+    VM_HOST: ${{ secrets.VM_HOST }}
+  run: |
+    echo "Testing SSH port on Azure VM..."
+    timeout 10 bash -c \
+      '</dev/tcp/$VM_HOST/22' \
+      && echo "SSH port reachable" \
+      || { echo "SSH port unreachable"; exit 1; }
+
       # Step 10: Deployment completion
       - name: Deployment Completed
         run: |
